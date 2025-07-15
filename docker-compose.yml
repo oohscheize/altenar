@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_DB: casino
+      POSTGRES_USER: casino
+      POSTGRES_PASSWORD: casino
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  rest-proxy:
+    image: confluentinc/cp-kafka-rest:7.4.0
+    depends_on:
+      - kafka
+    ports:
+      - "8082:8082"
+    environment:
+      KAFKA_REST_HOST_NAME: rest-proxy
+      KAFKA_REST_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_REST_LISTENERS: "http://0.0.0.0:8082"
+
+  migrate:
+    image: migrate/migrate
+    depends_on:
+      - postgres
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for postgres..."; \
+        while ! nc -z postgres 5432; do sleep 1; done; \
+        echo "Postgres is up! Running migrations..."; \
+        migrate -path=/migrations -database=postgres://casino:casino@postgres:5432/casino?sslmode=disable up
+    volumes:
+      - ./internal/db/migrations:/migrations:ro
+
+  api:
+    build:
+      context: .
+      dockerfile: ./cmd/api/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - migrate
+
+  consumer:
+    build:
+      context: .
+      dockerfile: ./cmd/consumer/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - kafka
+      - migrate
+
+volumes:
+  postgres_data:
